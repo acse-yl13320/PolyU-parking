@@ -1,3 +1,13 @@
 *.csv
 *.json
 *.svg
+*.png
+*.mp4
+*.npy
+*.pt
+*.pth
+*.txt
+meter*
+wandb*
+garage*
+__pycache__
