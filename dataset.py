@@ -87,7 +87,7 @@ class ParkDataset(Dataset):
     
         
 class CombinedDataset(Dataset):
-    def __init__(self, root='./', meter='meter_dataset', garage='garage_dataset', in_memory=[False, True], len_x=10, time_y=[15, 30, 45], transform=None, pre_transform=None, pre_filter=None):
+    def __init__(self, root='./', meter='meter_dataset', garage='garage_dataset', in_memory=[True, True], len_x=10, time_y=[15, 30, 45], transform=None, pre_transform=None, pre_filter=None):
         self.meter_dataset = ParkDataset(root=osp.join(root, meter), in_memory=in_memory[0], len_x=len_x, time_y=time_y, transform=transform, pre_transform=pre_transform)
         self.garage_dataset = ParkDataset(root=osp.join(root, garage), in_memory=in_memory[1], len_x=len_x, time_y=time_y, transform=transform, pre_transform=pre_transform)
         
@@ -101,8 +101,6 @@ class CombinedDataset(Dataset):
         
         self.y_idxs = self.meter_dataset.y_idxs
         self.len_y = self.meter_dataset.len_y
-        
-        self.scale = False
         
         self.dtype = 'combine'
         

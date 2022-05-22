@@ -1,9 +1,8 @@
 import os.path as osp
 import os
+import matplotlib.pyplot as plt
 import torch
-
 from torch_geometric.loader import DataLoader
-
 from torch.nn import BCELoss, BCEWithLogitsLoss, MSELoss
 import wandb
 from tqdm import tqdm
@@ -16,9 +15,10 @@ from dataset import *
 from model import *
 
 def combine_loss(ga_loss, me_loss):
-    # return torch.vstack((ga_loss, me_loss))
+    me_loss /= 20
+    return torch.vstack((ga_loss, me_loss))
     # return me_loss
-    return ga_loss
+    # return ga_loss
 
 def descale_batch(out, batch_size, num_nodes, t_out, min_v, range_v):
     out = out.view(batch_size, num_nodes, t_out)
@@ -26,8 +26,11 @@ def descale_batch(out, batch_size, num_nodes, t_out, min_v, range_v):
         for j in range(t_out):
             out[i, :, j] *= range_v
             out[i, :, j] += min_v
-    out = out.view(-1, t_out)
-    return out
+    
+    if t_out == 1:
+        return out.view(-1)
+    else:
+        return out.view(-1, t_out)
 
 def test(model, device, loss_fn, test_set: Dataset, test_batch_size=64):
     print('start testing...')
@@ -97,7 +100,7 @@ def test(model, device, loss_fn, test_set: Dataset, test_batch_size=64):
         return loss_dict, test_score.score_dict()
     
     
-def train(train_set: Dataset, test_set: Dataset, name='try', model_dict=None, epochs=100, batch_size=32, test_batch_size=64, lr=0.01, resume=False):
+def train(train_set: Dataset, test_set: Dataset, name='try', model_path=None, epochs=100, batch_size=32, test_batch_size=64, lr=0.01, resume=False):
     
     current_time = time.strftime('%Y-%m-%d-%H-%M-',time.localtime())
     folder = osp.join('runs', train_set.dtype, current_time + name)
@@ -114,9 +117,11 @@ def train(train_set: Dataset, test_set: Dataset, name='try', model_dict=None, ep
     t_out = train_set[0].y.shape[1]
     f.write('num_nodes: %d\nt_in: %d\nt_out: %d\n'%(num_nodes, t_in, t_out))
     
-    model = Graph(num_nodes, t_in, t_out).to(device)
-    if model_dict is not None:
-        model.load_state_dict(model_dict)
+    if model_path is not None:
+        model = torch.load(model_path)
+    else:
+        model = Graph(num_nodes, t_in, t_out).to(device)
+    
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=5e-4)
     
     dtype = train_set.dtype
@@ -140,7 +145,7 @@ def train(train_set: Dataset, test_set: Dataset, name='try', model_dict=None, ep
         wandb.init(project=dtype, resume=True)
     else:
         wandb.init(project=dtype, name=name)
-    wandb.watch(model, log='all')
+    # wandb.watch(model, log='all')
     
     if train_set.scale:
         min_v = train_set.min_v.to(device)
@@ -227,12 +232,9 @@ def train(train_set: Dataset, test_set: Dataset, name='try', model_dict=None, ep
         wandb_dict = losses | train_score_dict | test_score_dict
         wandb.log(wandb_dict)
         
-        torch.save(model.state_dict(), osp.join(folder, 'model.pth'))
+        torch.save(model, osp.join(folder, 'model.pt'))
         
     f.close()
-    
-    
-
 
 def baseline(dataset: Dataset, method='mean'):
     if dataset.dtype == 'meter':
@@ -280,6 +282,110 @@ def baseline(dataset: Dataset, method='mean'):
     print('loss_t_avg:', losses.mean())
     print(score.score_dict())
     
+    
+def test_dataset(model, test_set: Dataset):
+    print('start dataset testing...')
+    num_nodes, t_out = test_set[0].y.shape
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    if type(model) == str:
+        assert model in ('last', 'mean')
+    else:
+        model.eval()
+        
+    print(model)
+    
+    loss_matrix = np.zeros((len(test_set), num_nodes))
+    
+    dtype = test_set.dtype
+    
+    test_score = generate_score_metrics(time_y=test_set.time_y[:1], dtype=dtype)
+    
+    if dtype == 'meter':
+        loss_fn = BCEWithLogitsLoss(reduction='none')
+    elif dtype == 'garage':
+        loss_fn = MSELoss(reduction='none')
+    elif dtype == 'combine':
+        loss_fn = [MSELoss(reduction='none'), BCEWithLogitsLoss(reduction='none')]
+        split_index = test_set[0].split_index
+    
+    if test_set.scale:
+        min_v = test_set.min_v.to(device)
+        range_v = test_set.range_v.to(device)
+    
+    for i, data in enumerate(tqdm(test_set)):
+        with torch.no_grad():
+            data = data.to(device)
+            y = data.y[:, 0]
+            
+            # output
+            if type(model) == str:
+                if model == 'last':
+                    out = data.x[:, -1]
+                elif model == 'mean':
+                    out = data.x.mean(axis=1)
+            else:    
+                out = model(data)[:, 0]
+            
+            # calculate loss
+            if dtype == 'combine':
+                ga_out = out[:split_index]
+                ga_y = y[:split_index]
+                ga_loss = loss_fn[0](ga_out, ga_y)
+                
+                me_out = out[split_index:]
+                me_y = y[split_index:]
+                me_loss = loss_fn[1](me_out, me_y)
+                
+                loss = torch.cat((ga_loss, me_loss))
+                
+                loss = loss.detach().cpu().numpy()
+                
+                loss_matrix[i] = loss
+                
+                if test_set.scale:
+                    ga_out = descale_batch(ga_out, -1, split_index, 1, min_v, range_v)
+                    ga_y = descale_batch(ga_y, -1, split_index, 1, min_v, range_v)
+                    
+                test_score[0].update(ga_y, ga_out)
+                test_score[1].update(me_y, me_out)
+            
+            else:
+                loss = loss_fn(out, y).cpu().numpy()
+                loss_matrix[i] = loss
+                
+                if test_set.scale:
+                    out = descale_batch(out, -1, num_nodes, 1, min_v, range_v)
+                    y = descale_batch(y, -1, num_nodes, 1, min_v, range_v)
+                test_score.update(y, out)
+    
+    print('avg loss', loss_matrix.mean())
+    if dtype == 'combine':
+        print('garage loss', loss_matrix[:, :split_index].mean())
+        print('meter loss', loss_matrix[:, split_index:].mean())
+        
+        plt.figure(figsize=(15, 9))
+        
+        cmap = 'Reds'
+        
+        plt.subplot(1, 2, 1)
+        plt.contour(loss_matrix[:, :split_index], cmap=cmap)
+        plt.colorbar()
+        
+        plt.subplot(1, 2, 2)
+        plt.contour(loss_matrix[:, split_index:], cmap=cmap)
+        plt.colorbar()
+        print('test score ga', test_score[0].score_dict())
+        print('test score me', test_score[1].score_dict())
+    else:
+        plt.figure(figsize=(18, 9))
+        plt.contour(loss_matrix)
+        plt.colorbar()
+        print('test score', test_score.score_dict())
+    
+    
+
         
 # from torch_geometric.data.collate import collate
 # from torch_geometric.data import Batch
