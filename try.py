@@ -1,7 +1,10 @@
+'''
+    train meter/garage data
+'''
 from utils import *
 from dataset import *
 
-root = '2022/garage_dataset'
+root = '2021/garage_dataset_smooth'
 # root = 'meter_dataset'
 
 dataset = ParkDataset(root, len_x=50, in_memory=True)
@@ -17,8 +20,8 @@ test_set.set_scalar(*scalar)
 # test_set = dataset[-100:]
 
 batch_size = 64
-name = '2022_lnr'
-n_epochs = 30
+name = 'debug'
+n_epochs = 100
 lr = 0.001
 
 model = None

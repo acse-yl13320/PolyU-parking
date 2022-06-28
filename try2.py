@@ -1,3 +1,6 @@
+'''
+    train combined data
+'''
 from utils import *
 from dataset import *
 
@@ -11,9 +14,9 @@ train_set.set_scalar(*scalar)
 test_set.set_scalar(*scalar)
 
 batch_size = 32
-name = 'gcn_lstm_lnr_comloss_0.0001'
-n_epochs = 30
-lr = 0.0001
+name = 'sage_lstm_lnr_filter'
+n_epochs = 100
+lr = 0.001
 
 model_path = None
 # model_dict = torch.load('runs\\garage\\2022-04-17-17-21-lnr_no_act\\model.pth')

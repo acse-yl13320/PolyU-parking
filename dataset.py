@@ -30,6 +30,13 @@ class ParkDataset(Dataset):
         super().__init__(root, transform, pre_transform, pre_filter)
         if in_memory:
             self.load_in_memory()
+            
+            
+        # '''
+        #     filter
+        # '''
+        # self.filter = np.load(root.split('/')[0] + '/' + 'white_list.npy')
+        # print('loading white list')
 
     @property
     def processed_file_names(self):
@@ -83,11 +90,14 @@ class ParkDataset(Dataset):
             for i in range(self.len_y):
                 Y[:, i] = (Y[:, i] - self.min_v) / self.range_v
         
+        # if self.filter is not None:
+        #     X = X[self.filter]
+        #     Y = Y[self.filter]
         return Data(x=X, edge_index=link, y=Y)
     
         
 class CombinedDataset(Dataset):
-    def __init__(self, root='./', meter='meter_dataset', garage='garage_dataset', in_memory=[True, True], len_x=10, time_y=[15, 30, 45], transform=None, pre_transform=None, pre_filter=None):
+    def __init__(self, root='./', meter='meter_dataset', garage='garage_dataset_filter', in_memory=[True, True], len_x=10, time_y=[15, 30, 45], transform=None, pre_transform=None, pre_filter=None):
         self.meter_dataset = ParkDataset(root=osp.join(root, meter), in_memory=in_memory[0], len_x=len_x, time_y=time_y, transform=transform, pre_transform=pre_transform)
         self.garage_dataset = ParkDataset(root=osp.join(root, garage), in_memory=in_memory[1], len_x=len_x, time_y=time_y, transform=transform, pre_transform=pre_transform)
         

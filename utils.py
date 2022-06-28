@@ -3,7 +3,7 @@ import os
 import matplotlib.pyplot as plt
 import torch
 from torch_geometric.loader import DataLoader
-from torch.nn import BCELoss, BCEWithLogitsLoss, MSELoss
+from torch.nn import BCELoss, BCEWithLogitsLoss, MSELoss, L1Loss
 import wandb
 from tqdm import tqdm
 import numpy as np
@@ -15,7 +15,7 @@ from dataset import *
 from model import *
 
 def combine_loss(ga_loss, me_loss):
-    me_loss /= 20
+    me_loss /= 50
     return torch.vstack((ga_loss, me_loss))
     # return me_loss
     # return ga_loss
@@ -36,7 +36,7 @@ def test(model, device, loss_fn, test_set: Dataset, test_batch_size=64):
     print('start testing...')
     num_nodes, t_out = test_set[0].y.shape
     
-    test_loader = DataLoader(test_set, batch_size=test_batch_size, shuffle=True)
+    test_loader = DataLoader(test_set, batch_size=test_batch_size, shuffle=True, drop_last=True)
     model.eval()
     test_loss = np.zeros(t_out)
     loss_count = 0
@@ -99,7 +99,6 @@ def test(model, device, loss_fn, test_set: Dataset, test_batch_size=64):
     else:
         return loss_dict, test_score.score_dict()
     
-    
 def train(train_set: Dataset, test_set: Dataset, name='try', model_path=None, epochs=100, batch_size=32, test_batch_size=64, lr=0.01, resume=False):
     
     current_time = time.strftime('%Y-%m-%d-%H-%M-',time.localtime())
@@ -124,13 +123,16 @@ def train(train_set: Dataset, test_set: Dataset, name='try', model_path=None, ep
     
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=5e-4)
     
+    period = 10
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[i for i in range(epochs) if i % period == period - 1], gamma=0.5)
+    
     dtype = train_set.dtype
     if dtype == 'meter':
         loss_fn = BCEWithLogitsLoss(reduction='none')
     elif dtype == 'garage':
-        loss_fn = MSELoss(reduction='none')
+        loss_fn = L1Loss(reduction='none')
     elif dtype == 'combine':
-        loss_fn = [MSELoss(reduction='none'), BCEWithLogitsLoss(reduction='none')]
+        loss_fn = [L1Loss(reduction='none'), BCEWithLogitsLoss(reduction='none')]
         split_index = train_set[0].split_index
         
         
@@ -154,11 +156,12 @@ def train(train_set: Dataset, test_set: Dataset, name='try', model_path=None, ep
     for epoch in range(epochs):
         print('epoch:', epoch)
         print('start training...')
-        train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+        train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, drop_last=True)
         
         train_loss = np.zeros(t_out)
         loss_count = 0
-        train_score = generate_score_metrics(time_y=train_set.time_y, dtype=train_set.dtype)
+        
+        train_score = generate_score_metrics(time_y=train_set.time_y, dtype=dtype)
         
         model.train()
         
@@ -206,6 +209,9 @@ def train(train_set: Dataset, test_set: Dataset, name='try', model_path=None, ep
                     out = descale_batch(out, -1, num_nodes, t_out, min_v, range_v)
                     y = descale_batch(batch.y, -1, num_nodes, t_out, min_v, range_v)
                 train_score.update(y, out)
+        
+        # adjust learning rate
+        scheduler.step()
             
         train_loss /= loss_count
         loss_dict = {}
@@ -213,6 +219,7 @@ def train(train_set: Dataset, test_set: Dataset, name='try', model_path=None, ep
             loss_dict['train_loss_t_%d'%(i + 1)] = loss
         loss_dict['train_loss_avg'] = train_loss.mean()
         print(loss_dict)
+
 
         if dtype == 'combine':
             train_score_dict = train_score[0].score_dict() | train_score[1].score_dict()
@@ -240,7 +247,7 @@ def baseline(dataset: Dataset, method='mean'):
     if dataset.dtype == 'meter':
         loss_fn = BCEWithLogitsLoss()
     elif dataset.dtype == 'garage':
-        loss_fn = MSELoss()
+        loss_fn = L1Loss()
     score = generate_score_metrics(time_y=dataset.time_y, dtype=dataset.dtype)
     
     # yesterday
@@ -300,7 +307,7 @@ def test_dataset(model, test_set: Dataset):
     
     dtype = test_set.dtype
     
-    test_score = generate_score_metrics(time_y=test_set.time_y[:1], dtype=dtype)
+    test_score = generate_score_metrics(time_y=test_set.time_y, dtype=dtype)
     
     if dtype == 'meter':
         loss_fn = BCEWithLogitsLoss(reduction='none')
@@ -317,16 +324,19 @@ def test_dataset(model, test_set: Dataset):
     for i, data in enumerate(tqdm(test_set)):
         with torch.no_grad():
             data = data.to(device)
-            y = data.y[:, 0]
+            y = data.y
             
             # output
             if type(model) == str:
                 if model == 'last':
-                    out = data.x[:, -1]
+                    x = data.x[:, -1]
                 elif model == 'mean':
-                    out = data.x.mean(axis=1)
-            else:    
-                out = model(data)[:, 0]
+                    x = data.x.mean(axis=1)
+                out = torch.ones_like(y)
+                for j in range(y.shape[1]):
+                    out[:, j] = x
+            else:
+                out = model(data)
             
             # calculate loss
             if dtype == 'combine':
@@ -338,11 +348,11 @@ def test_dataset(model, test_set: Dataset):
                 me_y = y[split_index:]
                 me_loss = loss_fn[1](me_out, me_y)
                 
-                loss = torch.cat((ga_loss, me_loss))
+                loss = torch.vstack((ga_loss, me_loss))
                 
                 loss = loss.detach().cpu().numpy()
                 
-                loss_matrix[i] = loss
+                loss_matrix[i] = loss.mean(axis=1)
                 
                 if test_set.scale:
                     ga_out = descale_batch(ga_out, -1, split_index, 1, min_v, range_v)
@@ -353,12 +363,13 @@ def test_dataset(model, test_set: Dataset):
             
             else:
                 loss = loss_fn(out, y).cpu().numpy()
-                loss_matrix[i] = loss
+                loss_matrix[i] = loss.mean(axis=1)
                 
                 if test_set.scale:
                     out = descale_batch(out, -1, num_nodes, 1, min_v, range_v)
                     y = descale_batch(y, -1, num_nodes, 1, min_v, range_v)
                 test_score.update(y, out)
+                
     
     print('avg loss', loss_matrix.mean())
     if dtype == 'combine':
@@ -383,6 +394,8 @@ def test_dataset(model, test_set: Dataset):
         plt.contour(loss_matrix)
         plt.colorbar()
         print('test score', test_score.score_dict())
+        
+    return loss_matrix, test_score
     
     
 

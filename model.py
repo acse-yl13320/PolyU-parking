@@ -27,7 +27,7 @@ class Graph(torch.nn.Module):
         '''
             x.shape = (batch_size * width, t_in)
         '''
-        # x = self.conv(data.x, data.edge_index)
+        x = self.conv(data.x, data.edge_index)
         
         # x = self.pool(x, edge_index)[0]
         
@@ -36,17 +36,17 @@ class Graph(torch.nn.Module):
             x.shape = (batch_size * width, t_in)
         '''
         # x = data.x
-        # x = x.view(-1, self.t_in, 1)
+        x = x.view(-1, self.t_in, 1)
         '''
             x.shape = (batch * width, seq=t_in, 1)
         '''
-        # x, (h, c) = self.lstm(x)
+        x, (h, c) = self.lstm(x)
         # x, h = self.gru(x)
         # x, h = self.rnn(x)
         '''
             x.shape = (batch * width, seq=t_in, 1*2)
         '''
-        x = data.x
+        # x = data.x
         x = x.reshape(-1, self.t_in)
         x = self.lnr(x)
         # x = self.activate(x)
