@@ -3,7 +3,7 @@ import os
 import matplotlib.pyplot as plt
 import torch
 from torch_geometric.loader import DataLoader
-from torch.nn import BCELoss, BCEWithLogitsLoss, MSELoss, L1Loss
+from torch.nn import BCEWithLogitsLoss, MSELoss, L1Loss
 import wandb
 from tqdm import tqdm
 import numpy as np
@@ -83,6 +83,7 @@ def test(model, device, loss_fn, test_set: Dataset, test_batch_size=64):
                 test_loss += loss
                 loss_count += 1
                 
+                y = batch.y
                 if test_set.scale:
                     out = descale_batch(out, -1, num_nodes, t_out, min_v, range_v)
                     y = descale_batch(batch.y, -1, num_nodes, t_out, min_v, range_v)
@@ -116,25 +117,27 @@ def train(train_set: Dataset, test_set: Dataset, name='try', model_path=None, ep
     t_out = train_set[0].y.shape[1]
     f.write('num_nodes: %d\nt_in: %d\nt_out: %d\n'%(num_nodes, t_in, t_out))
     
+    
+    dtype = train_set.dtype
+    if dtype == 'meter':
+        loss_fn = BCEWithLogitsLoss(reduction='none')
+        model = Graph_Meter(num_nodes, t_in, t_out).to(device)
+    elif dtype == 'garage':
+        loss_fn = L1Loss(reduction='none')
+        model = Graph_Garage(num_nodes, t_in, t_out).to(device)
+    elif dtype == 'combine':
+        loss_fn = [L1Loss(reduction='none'), BCEWithLogitsLoss(reduction='none')]
+        model = Graph_Meter(num_nodes, t_in, t_out).to(device)
+        split_index = train_set[0].split_index
+        
     if model_path is not None:
         model = torch.load(model_path)
-    else:
-        model = Graph(num_nodes, t_in, t_out).to(device)
-    
+        
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=5e-4)
     
     period = 10
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[i for i in range(epochs) if i % period == period - 1], gamma=0.5)
     
-    dtype = train_set.dtype
-    if dtype == 'meter':
-        loss_fn = BCEWithLogitsLoss(reduction='none')
-    elif dtype == 'garage':
-        loss_fn = L1Loss(reduction='none')
-    elif dtype == 'combine':
-        loss_fn = [L1Loss(reduction='none'), BCEWithLogitsLoss(reduction='none')]
-        split_index = train_set[0].split_index
-        
         
     f.write(str(model))
     f.write('\n')
@@ -205,9 +208,10 @@ def train(train_set: Dataset, test_set: Dataset, name='try', model_path=None, ep
                 loss.backward()
                 optimizer.step()
                 
+                y = batch.y
                 if train_set.scale:
                     out = descale_batch(out, -1, num_nodes, t_out, min_v, range_v)
-                    y = descale_batch(batch.y, -1, num_nodes, t_out, min_v, range_v)
+                    y = descale_batch(y, -1, num_nodes, t_out, min_v, range_v)
                 train_score.update(y, out)
         
         # adjust learning rate

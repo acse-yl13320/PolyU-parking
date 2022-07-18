@@ -159,6 +159,5 @@ def dataset_scalar(dataset):
         for data in tqdm(dataset[:len(dataset):dataset.len_x]):
             min_v = torch.minimum(data.x.min(axis=1)[0], min_v)
             max_v = torch.maximum(data.x.max(axis=1)[0], max_v)
-    
     return min_v, max_v
 

@@ -4,10 +4,10 @@
 from utils import *
 from dataset import *
 
-root = '2021/garage_dataset_smooth'
-# root = 'meter_dataset'
+root = '2022/garage_dataset'
+# root = '2022/meter_dataset'
 
-dataset = ParkDataset(root, len_x=50, in_memory=True)
+dataset = ParkDataset(root, len_x=50, in_memory=True)[:20000]
 train_set = dataset[:16000]
 test_set = dataset[16000:]
 
@@ -15,12 +15,8 @@ scalar = dataset_scalar(train_set)
 train_set.set_scalar(*scalar)
 test_set.set_scalar(*scalar)
 
-# test_set = train_set
-# train_set = dataset[:100]
-# test_set = dataset[-100:]
-
 batch_size = 64
-name = 'debug'
+name = 'lstm_lnr'
 n_epochs = 100
 lr = 0.001
 
